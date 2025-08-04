@@ -15,7 +15,7 @@
 #define WAKE_GPIO_NUM GPIO_NUM_15
 
 // The time to dwell between measurements
-#define SLEEP_INTERVAL_US (15 * 60 * 1000000ULL)
+#define SLEEP_INTERVAL_US (30 * 1000000ULL)
 
 
 //--- LoRaWAN configuration ---//
@@ -23,13 +23,13 @@
 // Uncomment this to enable dry-run mode, which skips actual LoRaWAN uplink
 // transmission and just prints the payload that would be sent.
 // Useful for testing without LoRaWAN connectivity and getting ratelimit'd or busted by the "bandwidth police".
-// #define LORAWAN_DRY_RUN_MODE
+#define LORAWAN_DRY_RUN_MODE
 
 // LoRaWAN keys for OTAA. Refer to the RadioLib documentation for details.
 #define RADIOLIB_LORAWAN_JOIN_EUI 0x0000000000000000
-#define RADIOLIB_LORAWAN_DEV_EUI 0x---------------
-#define RADIOLIB_LORAWAN_APP_KEY 0x--, 0x--, 0x--, 0x--, 0x--, 0x--, 0x--, 0x--, 0x--, 0x--, 0x--, 0x--, 0x--, 0x--, 0x--, 0x--
-#define RADIOLIB_LORAWAN_NWK_KEY 0x--, 0x--, 0x--, 0x--, 0x--, 0x--, 0x--, 0x--, 0x--, 0x--, 0x--, 0x--, 0x--, 0x--, 0x--, 0x--
+#define RADIOLIB_LORAWAN_DEV_EUI 0x70B3D57ED0069153
+#define RADIOLIB_LORAWAN_APP_KEY 0xE1, 0x03, 0x8F, 0x0B, 0xF6, 0x3D, 0x80, 0x80, 0x3D, 0x3B, 0xC6, 0x15, 0xA5, 0x24, 0x58, 0xD4
+#define RADIOLIB_LORAWAN_NWK_KEY 0xC8, 0x7F, 0xC4, 0xFA, 0xF7, 0xD6, 0xFB, 0x72, 0x3E, 0x94, 0x0A, 0x7A, 0x33, 0xE0, 0x46, 0xC7
 
 // LoRaWAN region and sub-band configuration. Make sure to set these according to your region's regulations.
 #define RADIOLIB_LORAWAN_REGION AU915
