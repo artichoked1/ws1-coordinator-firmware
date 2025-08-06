@@ -1,3 +1,6 @@
+// From Radiolib's ESP example:
+// https://github.com/jgromes/RadioLib/blob/1dfd194c9ce9bae456c09e774767b810b32951e0/examples/NonArduino/ESP-IDF/main/EspHal.h
+
 #ifndef ESP_HAL_H
 #define ESP_HAL_H
 
