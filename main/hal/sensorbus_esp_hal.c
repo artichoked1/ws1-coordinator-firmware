@@ -1,4 +1,4 @@
-#include <WeatherBus.h>
+#include <weatherbus.h>
 #include <driver/uart.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
