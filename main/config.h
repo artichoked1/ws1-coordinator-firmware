@@ -1,3 +1,5 @@
+#pragma once
+
 //-- General configuration ---//
 
 // The SPI pins used for the LoRa module
@@ -17,6 +19,13 @@
 // The time to dwell between measurements
 #define SLEEP_INTERVAL_US (30 * 1000000ULL)
 
+// RS485 UART config
+#define UART_PORT UART_NUM_1
+#define TX_PIN GPIO_NUM_17
+#define RX_PIN GPIO_NUM_16
+#define DE_PIN GPIO_NUM_18
+#define RE_PIN GPIO_NUM_19
+#define BAUD_RATE 9600
 
 //--- LoRaWAN configuration ---//
 
