@@ -1,3 +1,6 @@
+// Based on Radiolib's radiolib-persistence utility functions, adapted for ESP-IDF:
+// https://github.com/radiolib-org/radiolib-persistence/blob/main/examples/LoRaWAN_ESP32/LoRaWAN_ESP32.ino
+
 #include "lorawan_storage.hpp"
 #include "esp_log.h"
 #include "nvs_flash.h"
