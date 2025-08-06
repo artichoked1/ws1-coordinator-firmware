@@ -1,5 +1,4 @@
-#include <WeatherBus.h>
-#include <WeatherBusPayload.h>
+#include <weatherbus.h>
 #include <RS485.h>
 #include <RadioLib.h>
 
