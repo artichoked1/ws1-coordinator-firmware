@@ -63,7 +63,7 @@ uint8_t uplink_payload[256];
 
 extern rs485_uart_t uart_dev;           // from hal/sensorbus_esp_hal.c
 
-RTC_DATA_ATTR int bootCount = 0;        // on a cold boot, this will be 1
+RTC_DATA_ATTR int boot_count = 0;        // on a cold boot, this will be 1
 
 
 //--- Helpers ---//
@@ -116,11 +116,11 @@ extern "C" void app_main(void)
 	esp_log_level_set("*", ESP_LOG_INFO);
 
 	// Set boot variables
-	bootCount++;
+	boot_count++;
 	esp_reset_reason_t reason = esp_reset_reason();
 	bool warmWake = (reason == ESP_RST_DEEPSLEEP);
 	bool coldBoot = !warmWake;
-	ESP_LOGI(TAG, "Boot count: %d", bootCount);
+	ESP_LOGI(TAG, "Boot count: %d", boot_count);
 	ESP_LOGI(TAG, "Cold boot: %s", coldBoot ? "Yes" : "No");
 
 	// Initialize NVS
