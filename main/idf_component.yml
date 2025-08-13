@@ -18,4 +18,4 @@ dependencies:
 
   WeatherBus:
     git: "git@github.com:artichoked1/WeatherBus.git"
-    version: "0a9e0fbb5255bef4a7ce968eb86605ae7d327c85"
+    version: "master"
