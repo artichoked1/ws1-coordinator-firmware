@@ -74,16 +74,16 @@ static void update_sensor(slave_entry_t *slave, const sensorbus_sensor_t *incomi
 	for (size_t i = 0; i < slave->sensor_count; i++) {
 		sensorbus_sensor_t &existing = slave->sensors[i];
 
-    // Check if the existing sensor matches the incoming one
+		// Check if the existing sensor matches the incoming one
 		if (existing.type == incoming->type && existing.index == incoming->index) {
 
-      // Update the existing sensor's value and format
+			// Update the existing sensor's value and format
 			existing.format = incoming->format;
 			// copy exactly the right number of bytes:
 			uint8_t fmt = (uint8_t)incoming->format;
 			uint8_t L = SENSORBUS_FMT_LEN[fmt];
 
-      // Copy only the required number of bytes
+			// Copy only the required number of bytes
 			memcpy(existing.value, incoming->value, L);
 
 			return;
@@ -102,7 +102,7 @@ static size_t append_slave_payload(uint8_t *out, const slave_entry_t *slave)
 		const sensorbus_sensor_t &sensor = slave->sensors[i];
 		sensorbus_pb_add_sensor(&pb, sensor.type, sensor.format, sensor.index, sensor.value);
 	}
-  // Chop the first 2 bytes off the slave ID to save space. The first two are just vendor and product code.
+	// Chop the first 2 bytes off the slave ID to save space. The first two are just vendor and product code.
 	uint16_t sid = (uint16_t)(slave->device_id & 0xFFFF);
 
 	out[0] = (uint8_t)(sid >> 8);
@@ -129,7 +129,7 @@ extern "C" void app_main(void)
 	// Initialize NVS
 	esp_err_t err = nvs_flash_init();
 	if (err == ESP_ERR_NVS_NO_FREE_PAGES ||
-	    err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+			err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
 		ESP_ERROR_CHECK(nvs_flash_erase());
 		ESP_ERROR_CHECK(nvs_flash_init());
 	}
@@ -173,7 +173,7 @@ extern "C" void app_main(void)
 		// Wait for discovery replies
 		uint32_t start = sensorbus_hal_get_time_ms();
 
-    // Start discovery window
+		// Start discovery window
 		while (sensorbus_hal_get_time_ms() - start < DISCOVERY_WINDOW_MS) {
 			sensorbus_error_t r = sensorbus_receive_timeout(PKT_TIMEOUT_MS, &pkt);
 
@@ -190,7 +190,7 @@ extern "C" void app_main(void)
 			size_t si;
 			for (si = 0; si < slave_count; si++) {
 				if (slaves[si].device_id == pkt.device_id) break;
-      }
+			}
 			if (si == slave_count && slave_count < MAX_SLAVES) {
 				slaves[si].device_id = pkt.device_id;
 				slaves[si].sensor_count = 0;
@@ -198,7 +198,7 @@ extern "C" void app_main(void)
 			}
 			for (size_t i = 0; i < tmpn && slaves[si].sensor_count < MAX_SENSOR_CNT; i++) {
 				slaves[si].sensors[slaves[si].sensor_count++] = tmp[i];
-      }
+			}
 		}
 
 		// Save discovered slaves to RTC RAM
@@ -216,13 +216,13 @@ extern "C" void app_main(void)
 		payload_builder_t query_buffer;
 		pb_init(&query_buffer);
 
-    // Query all sensors of the slave
+		// Query all sensors of the slave
 		for (size_t j = 0; j < slaves[si].sensor_count; j++) {
 			if (query_buffer.len + 3 > SENSORBUS_MAX_PAYLOAD) break;
 			sensorbus_pb_add_descriptor(&query_buffer, slaves[si].sensors[j].type, slaves[si].sensors[j].index);
 		}
 
-    // Send query and collect response
+		// Send query and collect response
 		sensorbus_send(SENSORBUS_QUERY, dev_id, query_buffer.buf, query_buffer.len);
 		sensorbus_packet_t resp;
 		if (sensorbus_receive_timeout(200, &resp) != SENSORBUS_OK) { // Should probably check for correct response type/origin
@@ -230,7 +230,7 @@ extern "C" void app_main(void)
 			continue;
 		}
 
-    // Convert response payload to sensors array
+		// Convert response payload to sensors array
 		sensorbus_sensor_t out[SENSORBUS_MAX_TLVS];
 		size_t outn = 0;
 		if (sensorbus_pb_decode_sensors(resp.payload, resp.payload_len, out, &outn) != SENSORBUS_OK) {
@@ -239,7 +239,7 @@ extern "C" void app_main(void)
 		}
 		for (size_t k = 0; k < outn; k++) {
 			update_sensor(&slaves[si], &out[k]);
-    }
+		}
 	}
 
 	// Fancy logging
@@ -250,21 +250,21 @@ extern "C" void app_main(void)
 		for (size_t i = 0; i < slaves[si].sensor_count; i++) {
 			const sensorbus_sensor_t &s = slaves[si].sensors[i];
 
-      // Buffer to hold hex string of the sensor val
+			// Buffer to hold hex string of the sensor val
 			char hexbuf[3 * SENSORBUS_MAX_VALUE_LEN + 1] = { 0 };
 
-      // Convert sensor value to hex string
+			// Convert sensor value to hex string
 			for (uint8_t j = 0; j < SENSORBUS_FMT_LEN[s.format]; j++) {
 				sprintf(&hexbuf[j * 3], "%02X ", s.value[j]);
-      }
+			}
 
-      // Log the sensor information
+			// Log the sensor information
 			ESP_LOGI(TAG, "│ type=0x%02X idx=%u fmt=%u len=%u val=%s",
-        s.type,
-        s.index,
-        s.format,
-        SENSORBUS_FMT_LEN[s.format],
-        hexbuf);
+				s.type,
+				s.index,
+				s.format,
+				SENSORBUS_FMT_LEN[s.format],
+				hexbuf);
 
 		}
 		ESP_LOGI(TAG, "└──");
@@ -275,7 +275,7 @@ extern "C" void app_main(void)
 
 	for (size_t si = 0; si < slave_count; ++si) {
 		uplink_len += append_slave_payload(uplink_payload + uplink_len, &slaves[si]);
-  }
+	}
 
 	if (uplink_len > 0) {
 		ESP_LOGI(TAG, "Built uplink payload with %zu bytes", uplink_len);
