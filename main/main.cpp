@@ -57,6 +57,7 @@ RTC_DATA_ATTR size_t rtc_slave_count = 0;
 slave_entry_t slaves[MAX_SLAVES];
 size_t slave_count = 0;
 
+uint8_t uplink_payload[256];
 
 //--- General Globals ---//
 
@@ -81,6 +82,31 @@ static void update_sensor(slave_entry_t *slave, const sensorbus_sensor_t *incomi
 			return;
 		}
 	}
+}
+
+// Group sensors by slave for the uplink payload.
+// Format: [slave short ID][sensor count][sensor TLVs]... for every slave
+static size_t append_slave_payload(uint8_t *out, const slave_entry_t *slave)
+{
+	payload_builder_t pb;
+
+	pb_init(&pb);
+	for (size_t i = 0; i < slave->sensor_count; ++i) {
+		const sensorbus_sensor_t &sensor = slave->sensors[i];
+		sensorbus_pb_add_sensor(&pb,
+					sensor.type,
+					sensor.format,
+					sensor.index,
+					sensor.value);
+	}
+  // Chop the first 2 bytes off the slave ID to save space. The first two are just vendor and product code.
+	uint16_t sid = (uint16_t)(slave->device_id & 0xFFFF);
+
+	out[0] = (uint8_t)(sid >> 8);
+	out[1] = (uint8_t)(sid & 0xFF);
+	out[2] = (uint8_t)slave->sensor_count;
+	memcpy(out + 3, pb.buf, pb.len);
+	return 3 + pb.len;
 }
 
 static const char *TAG = "main";
@@ -121,7 +147,7 @@ extern "C" void app_main(void)
 		return;
 	}
 	radioLibState = lwActivate(node);
-	node.setDutyCycle(false);
+  node.setDutyCycle(false);
 	node.setADR(false);
 	node.setDatarate(3);
 	node.setDwellTime(false);
@@ -238,21 +264,16 @@ extern "C" void app_main(void)
 		ESP_LOGI(TAG, "└──");
 	}
 
-	// Build and send a single LoRaWAN uplink
-	payload_builder_t lb;
-	pb_init(&lb);
+	// Build and send the uplink.
+	size_t uplink_len = 0;
 
-	for (size_t si = 0; si < slave_count; si++) {
-		for (size_t i = 0; i < slaves[si].sensor_count; i++) {
-			const sensorbus_sensor_t &sensor = slaves[si].sensors[i];
-			sensorbus_pb_add_sensor(&lb, sensor.type, sensor.format, sensor.index, sensor.value);
-		}
-  }
+	for (size_t si = 0; si < slave_count; ++si)
+		uplink_len += append_slave_payload(uplink_payload + uplink_len,
+						   &slaves[si]);
 
-	size_t uplink_len = lb.len;
 	if (uplink_len > 0) {
 		ESP_LOGI(TAG, "Built uplink payload with %zu bytes", uplink_len);
-		radioLibState = node.sendReceive(lb.buf, uplink_len);
+		radioLibState = node.sendReceive(uplink_payload, uplink_len);
 		ESP_LOGI(TAG, "Radiolib code: %d, FCntUp now %" PRIu32, radioLibState, node.getFCntUp());
 		memcpy(LWsession, node.getBufferSession(), RADIOLIB_LORAWAN_SESSION_BUF_SIZE);
 	} else {
