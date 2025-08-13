@@ -11,7 +11,7 @@
 
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
 
-extern RTC_DATA_ATTR int bootCount;
+extern RTC_DATA_ATTR int boot_count;
 RTC_DATA_ATTR static int bootCountSinceUnsuccessfulJoin = 0;
 RTC_DATA_ATTR uint8_t LWsession[RADIOLIB_LORAWAN_SESSION_BUF_SIZE];
 
@@ -36,9 +36,9 @@ int lwActivate(LoRaWANNode& node)
 				ESP_LOGI(TAG, "Nonces buffer restored successfully.");
 		}
 		state = node.setBufferSession(LWsession);
-		if (state != RADIOLIB_ERR_NONE && bootCount > 1)
+		if (state != RADIOLIB_ERR_NONE && boot_count > 1)
 			ESP_LOGE(TAG, "Restoring session buffer failed (code: %d, bootCount: %d)",
-				 state, bootCount);
+				 state, boot_count);
 		else
 			ESP_LOGI(TAG, "Session buffer restored successfully.");
 		nvs_close(handle);
