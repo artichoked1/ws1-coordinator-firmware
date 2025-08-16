@@ -44,7 +44,7 @@ int lwActivate(LoRaWANNode& node)
 		nvs_close(handle);
 		if (state == RADIOLIB_ERR_NONE) {
 			ESP_LOGI(TAG, "Session restored successfully. Attempting to join...");
-			state = node.activateOTAA(3);
+			state = node.activateOTAA();
 			if (state != RADIOLIB_LORAWAN_SESSION_RESTORED)
 				ESP_LOGE(TAG, "Failed to restore session: %d", state);
 			else
