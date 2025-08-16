@@ -61,9 +61,9 @@ uint8_t uplink_payload[256];
 
 //--- General Globals ---//
 
-extern rs485_uart_t uart_dev;           // from hal/sensorbus_esp_hal.c
+extern rs485_uart_t uart_dev; // from hal/sensorbus_esp_hal.c
 
-RTC_DATA_ATTR int boot_count = 0;        // on a cold boot, this will be 1
+RTC_DATA_ATTR int boot_count = 0;  // on a cold boot, this will be 1
 
 
 //--- Helpers ---//
@@ -76,7 +76,6 @@ static void update_sensor(slave_entry_t *slave, const sensorbus_sensor_t *incomi
 
 		// Check if the existing sensor matches the incoming one
 		if (existing.type == incoming->type && existing.index == incoming->index) {
-
 			// Update the existing sensor's value and format
 			existing.format = incoming->format;
 			// copy exactly the right number of bytes:
@@ -129,7 +128,7 @@ extern "C" void app_main(void)
 	// Initialize NVS
 	esp_err_t err = nvs_flash_init();
 	if (err == ESP_ERR_NVS_NO_FREE_PAGES ||
-			err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+	    err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
 		ESP_ERROR_CHECK(nvs_flash_erase());
 		ESP_ERROR_CHECK(nvs_flash_init());
 	}
@@ -260,11 +259,11 @@ extern "C" void app_main(void)
 
 			// Log the sensor information
 			ESP_LOGI(TAG, "│ type=0x%02X idx=%u fmt=%u len=%u val=%s",
-				s.type,
-				s.index,
-				s.format,
-				SENSORBUS_FMT_LEN[s.format],
-				hexbuf);
+				 s.type,
+				 s.index,
+				 s.format,
+				 SENSORBUS_FMT_LEN[s.format],
+				 hexbuf);
 
 		}
 		ESP_LOGI(TAG, "└──");
@@ -279,9 +278,20 @@ extern "C" void app_main(void)
 
 	if (uplink_len > 0) {
 		ESP_LOGI(TAG, "Built uplink payload with %zu bytes", uplink_len);
+
+#ifndef LORAWAN_DRY_RUN_MODE
+		// Normal send process
 		radioLibState = node.sendReceive(uplink_payload, uplink_len);
-		ESP_LOGI(TAG, "Radiolib code: %d, FCntUp now %" PRIu32, radioLibState, node.getFCntUp());
+		ESP_LOGI(TAG, "Radiolib code: %d, FCntUp now %" PRIu32,
+			 radioLibState, node.getFCntUp());
 		memcpy(LWsession, node.getBufferSession(), RADIOLIB_LORAWAN_SESSION_BUF_SIZE);
+#else
+		// Dump the bytes instead of sending on dry-run mode
+		printf("DRY_RUN_MODE enabled — would send uplink (%zu bytes):\n", uplink_len);
+		for (size_t i = 0; i < uplink_len; i++)
+			printf("%02X ", uplink_payload[i]);
+		printf("\n");
+#endif
 	} else {
 		ESP_LOGW(TAG, "Nothing to send (payload %zu bytes)", uplink_len);
 	}
