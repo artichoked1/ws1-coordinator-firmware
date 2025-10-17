@@ -16,6 +16,8 @@
 // the wakeup line to wake all slaves on the bus
 #define WAKE_GPIO_NUM GPIO_NUM_15
 
+#define LED_PIN GPIO_NUM_4
+
 // The time to dwell between measurements
 #define SLEEP_INTERVAL_US (30 * 1000000ULL)
 

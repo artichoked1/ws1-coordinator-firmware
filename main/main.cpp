@@ -34,7 +34,7 @@ EspHal *hal = new EspHal(SPI_SCK_PIN, SPI_MISO_PIN, SPI_MOSI_PIN);
 const LoRaWANBand_t Region = RADIOLIB_LORAWAN_REGION;
 const uint8_t subBand = RADIOLIB_LORAWAN_SUB_BAND;
 
-SX1276 radio = new Module(
+RFM95 radio = new Module(
 	hal,
 	SX1276_CS_PIN,
 	SX1276_IRQ_PIN,
@@ -64,6 +64,8 @@ uint8_t uplink_payload[256];
 extern rs485_uart_t uart_dev; // from hal/sensorbus_esp_hal.c
 
 RTC_DATA_ATTR int boot_count = 0;  // on a cold boot, this will be 1
+
+static const char *TAG = "main";
 
 
 //--- Helpers ---//
@@ -111,19 +113,64 @@ static size_t append_slave_payload(uint8_t *out, const slave_entry_t *slave)
 	return 3 + pb.len;
 }
 
-static const char *TAG = "main";
+void flash_led(int times)
+{
+  for (int i = 0; i < times; i++) {
+    gpio_set_level(LED_PIN, 1);
+    vTaskDelay(pdMS_TO_TICKS(100));
+    gpio_set_level(LED_PIN, 0);
+    vTaskDelay(pdMS_TO_TICKS(100));
+  }
+}
+
+void sleep_bus()
+{
+  // Put the RS485 bus to sleep
+  ESP_LOGI(TAG, "Putting bus to sleep...");
+  rs485_enter_shutdown(&uart_dev);
+  gpio_set_level(GPIO_NUM_15, 0); // Set the wake pin low to put slaves to sleep
+  ESP_LOGI(TAG, "Bus is now asleep.");
+}
+
+void wake_bus()
+{
+  // Wake up the RS485 bus
+  ESP_LOGI(TAG, "Waking up bus...");
+  rs485_exit_shutdown(&uart_dev);
+  gpio_set_level(GPIO_NUM_15, 1); // Set the wake pin high to wake slaves
+  vTaskDelay(pdMS_TO_TICKS(100)); // Wait for slaves to wake up
+  ESP_LOGI(TAG, "Bus is now awake.");
+}
+
+static void wake_pin_init()
+{
+  // Make sure previous sleep didn't leave a hold latched
+  gpio_hold_dis(GPIO_NUM_15);
+
+  // Reset the pad mux & pulls to a clean state
+  gpio_reset_pin(GPIO_NUM_15);
+
+  // Force it to GPIO output, start low
+  ESP_ERROR_CHECK(gpio_set_direction(GPIO_NUM_15, GPIO_MODE_OUTPUT));
+  ESP_ERROR_CHECK(gpio_set_pull_mode(GPIO_NUM_15, GPIO_FLOATING)); // or GPIO_PULLDOWN_ONLY
+  ESP_ERROR_CHECK(gpio_set_level(GPIO_NUM_15, 0));
+}
+
 
 extern "C" void app_main(void)
 {
 	esp_log_level_set("*", ESP_LOG_INFO);
-
-	// Set boot variables
+  wake_pin_init();
+  gpio_set_direction(LED_PIN, GPIO_MODE_OUTPUT);
+  // Set boot variables
 	boot_count++;
 	esp_reset_reason_t reason = esp_reset_reason();
 	bool warmWake = (reason == ESP_RST_DEEPSLEEP);
 	bool coldBoot = !warmWake;
 	ESP_LOGI(TAG, "Boot count: %d", boot_count);
 	ESP_LOGI(TAG, "Cold boot: %s", coldBoot ? "Yes" : "No");
+
+  flash_led(2);
 
 	// Initialize NVS
 	esp_err_t err = nvs_flash_init();
@@ -148,12 +195,19 @@ extern "C" void app_main(void)
 		return;
 	}
 	radioLibState = lwActivate(node);
+  node.setTxPower(14);
+  node.setDutyCycle(false);
+  node.setADR(false);
+  node.setDatarate(4);
+
 #else
 	ESP_LOGI(TAG, "Dry-run mode: skipping radio and LoRaWAN initialization.");
 #endif
 
 	// Init RS485 and WeatherBus
 	sensorbus_init();
+
+  wake_bus();
 
 	// Restore slaves from RTC RAM if available
 	if (!coldBoot && rtc_slave_count > 0) {
@@ -240,7 +294,6 @@ extern "C" void app_main(void)
 			update_sensor(&slaves[si], &out[k]);
 		}
 	}
-
 	// Fancy logging
 	for (size_t si = 0; si < slave_count; si++) {
 
@@ -296,6 +349,7 @@ extern "C" void app_main(void)
 		ESP_LOGW(TAG, "Nothing to send (payload %zu bytes)", uplink_len);
 	}
 
+  sleep_bus();
 	esp_sleep_enable_timer_wakeup(SLEEP_INTERVAL_US);
 	ESP_LOGI(TAG, "Entering deep sleep for %llu seconds...", (SLEEP_INTERVAL_US / 1000000ULL));
 	esp_deep_sleep_start();
