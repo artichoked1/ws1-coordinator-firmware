@@ -2,7 +2,7 @@
 dependencies:
   ## Required IDF version
   idf:
-    version: ">=4.1.0"
+    version: '>=4.1.0'
   # # Put list of dependencies here
   # # For components maintained by Espressif:
   # component: "~1.0.0"
@@ -17,5 +17,6 @@ dependencies:
   jgromes/radiolib: ^7.2.1
 
   WeatherBus:
-    git: "git@github.com:artichoked1/WeatherBus.git"
-    version: "master"
+    git: git@github.com:artichoked1/WeatherBus.git
+    version: master
+  espressif/esp_mqtt_cxx: ^0.4.0

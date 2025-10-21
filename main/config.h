@@ -29,12 +29,12 @@
 #define RE_PIN GPIO_NUM_19
 #define BAUD_RATE 9600
 
+// Disables all form of rardio sending, dumps the would-be sent bytes to console instead.
+#define DRY_RUN_MODE false
+
 //--- LoRaWAN configuration ---//
 
-// Uncomment this to enable dry-run mode, which skips actual LoRaWAN uplink
-// transmission and just prints the payload that would be sent.
-// Useful for testing without LoRaWAN connectivity and getting ratelimit'd or busted by the "bandwidth police".
-#define LORAWAN_DRY_RUN_MODE
+#define LORAWAN_ENABLE false
 
 // LoRaWAN keys for OTAA. Refer to the RadioLib documentation for details.
 #define RADIOLIB_LORAWAN_JOIN_EUI 0x0000000000000000
@@ -68,4 +68,24 @@
 #define DISCOVERY_WINDOW_MS 3000
 
 // The timeout for receiving packets in milliseconds.
-#define PKT_TIMEOUT_MS 200
+#define PKT_TIMEOUT_MS 1000
+
+//--- WiFi / MQTT configuration ---//
+
+#define MQTT_ENABLE true
+
+#define WIFI_SSID "ssid"
+#define WIFI_PASS "very-secret"
+
+#define MQTT_USE_V5 false
+#define MQTT_USE_TLS false
+#define MQTT_BROKER_URL "mqtt://test.mosquitto.org:1883"
+#define MQTT_BROKER_PORT 8883
+
+#define MQTT_USE_AUTH false
+#define MQTT_USERNAME ""
+#define MQTT_PASSWORD ""
+
+#define MQTT_PUBLISH_TOPIC "weatherbus/coordinator/sensor_data"
+
+

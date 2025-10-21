@@ -15,7 +15,7 @@ extern RTC_DATA_ATTR int boot_count;
 RTC_DATA_ATTR static int bootCountSinceUnsuccessfulJoin = 0;
 RTC_DATA_ATTR uint8_t LWsession[RADIOLIB_LORAWAN_SESSION_BUF_SIZE];
 
-static const char *TAG = "LorawanStorage";
+static const char *TAG = "LoraWANStorage";
 
 namespace lorawan {
 int lwActivate(LoRaWANNode& node)

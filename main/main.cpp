@@ -11,12 +11,27 @@
 #include <nvs_flash.h>
 #include <stdio.h>
 #include <string.h>
+#include <esp_wifi.h>
+#include <esp_event.h>
+#include <esp_mqtt.hpp>
+#include <cJSON.h>
+#include <esp_sntp.h>
+#include <ctime>
 
 #include "config.h"
 #include "hal/radiolib_esp_hal.h"
 #include "lorawan_storage.hpp"
+#include "esp_mqtt_client_config.hpp"
 
 using namespace lorawan;
+
+static const char *MAIN = "Main";
+static const char *WIFI = "WiFi";
+static const char *MQTT = "MQTT";
+static const char *SNTP = "SNTP";
+static const char *JSON = "JSON";
+static const char *WBUS = "WeatherBus";
+static const char *LORAWAN = "LoRaWAN";
 
 //--- LoRaWAN Globals ---//
 
@@ -45,7 +60,6 @@ LoRaWANNode node(&radio, &Region, subBand);
 
 
 //--- WeatherBus Globals ---//
-
 typedef struct {
 	uint32_t device_id;
 	sensorbus_sensor_t sensors[MAX_SENSOR_CNT];
@@ -65,7 +79,247 @@ extern rs485_uart_t uart_dev; // from hal/sensorbus_esp_hal.c
 
 RTC_DATA_ATTR int boot_count = 0;  // on a cold boot, this will be 1
 
-static const char *TAG = "main";
+
+//--- WiFi and MQTT ---//
+
+#if MQTT_ENABLE == true
+
+static void initialise_sntp(void)
+{
+    ESP_LOGI(SNTP, "Initialising SNTP");
+    esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
+    esp_sntp_setservername(0, "pool.ntp.org"); // or your local NTP server
+    esp_sntp_init();
+}
+
+static void wait_for_time_sync(void)
+{
+    time_t now = 0;
+    struct tm timeinfo = { 0 };
+    int retry = 0;
+    const int retry_count = 15;
+
+
+    while (timeinfo.tm_year < (2020 - 1900) && ++retry < retry_count) {
+        ESP_LOGI(SNTP, "Waiting for system time to be set... (%d/%d)", retry, retry_count);
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        time(&now);
+        localtime_r(&now, &timeinfo);
+    }
+
+    char strftime_buf[64];
+    strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
+    ESP_LOGI(SNTP, "System time is now: %s", strftime_buf);
+}
+
+static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data)
+{
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
+        esp_wifi_connect();
+    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        ESP_LOGI(WIFI, "Got IP, ready for MQTT!");
+        initialise_sntp();
+    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        esp_wifi_connect();
+        ESP_LOGI(WIFI, "Retrying WiFi...");
+    }
+}
+
+void wifi_init_sta(void)
+{
+    esp_netif_init();
+    esp_event_loop_create_default();
+    esp_netif_create_default_wifi_sta();
+
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    esp_wifi_init(&cfg);
+
+    esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL);
+    esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL);
+
+    wifi_config_t wifi_config = {
+        .sta = {
+            .ssid = WIFI_SSID,
+            .password = WIFI_PASS,
+        },
+    };
+
+    esp_wifi_set_mode(WIFI_MODE_STA);
+    esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
+    esp_wifi_start();
+
+    ESP_LOGI(WIFI, "WiFi init done.");
+}
+
+// Build a TTN-style JSON payload to send directly to the MQTT broker in WiFi mode.
+static std::string build_json_payload(const slave_entry_t *slaves, size_t slave_count)
+{
+    cJSON *root = cJSON_CreateObject();
+    cJSON *uplink_message = cJSON_CreateObject();
+    cJSON *decoded_payload = cJSON_CreateObject();
+    cJSON *slaves_array = cJSON_CreateArray();
+    cJSON *end_device_ids = cJSON_CreateObject();
+
+    // Build slave entries
+    for (size_t si = 0; si < slave_count; si++) {
+        cJSON *slave_obj = cJSON_CreateObject();
+        cJSON_AddNumberToObject(slave_obj, "id", slaves[si].device_id & 0xFFFF);
+
+        cJSON *sensors_array = cJSON_CreateArray();
+
+        for (size_t i = 0; i < slaves[si].sensor_count; i++) {
+            const sensorbus_sensor_t &s = slaves[si].sensors[i];
+            cJSON *sensor_obj = cJSON_CreateObject();
+
+            cJSON_AddNumberToObject(sensor_obj, "type", s.type);
+            cJSON_AddNumberToObject(sensor_obj, "index", s.index);
+            cJSON_AddNumberToObject(sensor_obj, "format", s.format);
+
+            // Decode the sensor value depending on format
+            double value = 0.0;
+
+            switch (s.format) {
+                case SENSORBUS_FMT_UINT8: {
+                    uint8_t v;
+                    memcpy(&v, s.value, sizeof(v));
+                    value = v;
+                    break;
+                }
+                case SENSORBUS_FMT_UINT16: {
+                    uint16_t v;
+                    memcpy(&v, s.value, sizeof(v));
+                    value = v;
+                    break;
+                }
+                case SENSORBUS_FMT_FLOAT32: {
+                    float v;
+                    memcpy(&v, s.value, sizeof(v));
+                    value = v;
+                    break;
+                }
+                case SENSORBUS_FMT_FLOAT64: {
+                    double v;
+                    memcpy(&v, s.value, sizeof(v));
+                    value = v;
+                    break;
+                }
+                case SENSORBUS_FMT_SFIX16_2DP: { // signed fixed-point, /100
+                    int16_t v;
+                    memcpy(&v, s.value, sizeof(v));
+                    value = static_cast<double>(v) / 100.0;
+                    break;
+                }
+                case SENSORBUS_FMT_UFIX16_1DP: { // unsigned fixed-point, /10
+                    uint16_t v;
+                    memcpy(&v, s.value, sizeof(v));
+                    value = static_cast<double>(v) / 10.0;
+                    break;
+                }
+                default:
+                    ESP_LOGW(JSON, "Unknown format %u", s.format);
+                    break;
+            }
+
+            cJSON_AddNumberToObject(sensor_obj, "value", value);
+            cJSON_AddItemToArray(sensors_array, sensor_obj);
+        }
+
+        cJSON_AddItemToObject(slave_obj, "sensors", sensors_array);
+        cJSON_AddItemToArray(slaves_array, slave_obj);
+    }
+
+    // Construct the full JSON
+    cJSON_AddItemToObject(decoded_payload, "slaves", slaves_array);
+    cJSON_AddItemToObject(uplink_message, "decoded_payload", decoded_payload);
+    cJSON_AddItemToObject(root, "uplink_message", uplink_message);
+    cJSON_AddItemToObject(root, "end_device_ids", end_device_ids);
+
+    // Add device EUI
+    uint64_t eui = RADIOLIB_LORAWAN_DEV_EUI;
+    char euibuf[17];
+    snprintf(euibuf, sizeof(euibuf), "%016llX", (unsigned long long)eui);
+    cJSON_AddStringToObject(end_device_ids, "dev_eui", euibuf);
+
+    // Add received_at timestamp
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    struct tm timeinfo;
+    gmtime_r(&tv.tv_sec, &timeinfo);
+
+    char timebuf[40];
+    strftime(timebuf, sizeof(timebuf), "%Y-%m-%dT%H:%M:%S", &timeinfo);
+
+    char full_time[64];
+    snprintf(full_time, sizeof(full_time), "%s.%06ld000Z", timebuf, tv.tv_usec);
+    cJSON_AddStringToObject(root, "received_at", full_time);
+
+    // Serialise to string
+    char *json_str = cJSON_PrintUnformatted(root);
+    std::string out(json_str);
+
+    free(json_str);
+    cJSON_Delete(root);
+    return out;
+}
+
+// Grab the CA cert from linker section if TLS is enabled, put it in memory.
+#if MQTT_USE_TLS == true
+  extern const char mqtt_ca_cert_start[] asm("_binary_mqtt_ca_cert_pem_start");
+  extern const char mqtt_ca_cert_end[] asm("_binary_mqtt_ca_cert_pem_end");
+#endif
+
+namespace mqtt = idf::mqtt;
+
+namespace {
+
+class MQTTClient final : public mqtt::Client {
+public:
+    using mqtt::Client::Client;
+
+private:
+    void on_connected(esp_mqtt_event_handle_t const event) override
+    {
+        using mqtt::QoS;
+        subscribe(messages.get());
+        subscribe(sent_load.get(), QoS::AtMostOnce);
+    }
+    void on_data(esp_mqtt_event_handle_t const event) override
+    {
+        if (messages.match(event->topic, event->topic_len)) {
+            ESP_LOGI(MQTT, "Received in the messages topic");
+        }
+    }
+    mqtt::Filter messages{"$SYS/broker/messages/received"};
+    mqtt::Filter sent_load{"$SYS/broker/load/+/sent"};
+};
+}
+
+    mqtt::BrokerConfiguration broker{
+    .address = {
+        mqtt::BrokerAddress{
+            .address = {mqtt::URI{std::string{MQTT_BROKER_URL}}},
+            .port = MQTT_BROKER_PORT
+        }
+    },
+    
+    #if MQTT_USE_TLS == true
+      .security = mqtt::CryptographicInformation{mqtt::PEM{mqtt_ca_cert_start}}
+    #else
+      .security = mqtt::Insecure{}
+    #endif
+};
+
+#if MQTT_USE_AUTH == true
+mqtt::ClientCredentials credentials{
+  .username = MQTT_USERNAME,
+	.authentication = mqtt::Password{MQTT_PASSWORD}};
+#else
+mqtt::ClientCredentials credentials{};
+#endif
+
+mqtt::Configuration config{};
+
+#endif
 
 
 //--- Helpers ---//
@@ -126,20 +380,20 @@ void flash_led(int times)
 void sleep_bus()
 {
   // Put the RS485 bus to sleep
-  ESP_LOGI(TAG, "Putting bus to sleep...");
+  ESP_LOGI(MAIN, "Putting bus to sleep...");
   rs485_enter_shutdown(&uart_dev);
   gpio_set_level(GPIO_NUM_15, 0); // Set the wake pin low to put slaves to sleep
-  ESP_LOGI(TAG, "Bus is now asleep.");
+  ESP_LOGI(MAIN, "Bus is now asleep.");
 }
 
 void wake_bus()
 {
   // Wake up the RS485 bus
-  ESP_LOGI(TAG, "Waking up bus...");
+  ESP_LOGI(MAIN, "Waking up bus...");
   rs485_exit_shutdown(&uart_dev);
   gpio_set_level(GPIO_NUM_15, 1); // Set the wake pin high to wake slaves
   vTaskDelay(pdMS_TO_TICKS(100)); // Wait for slaves to wake up
-  ESP_LOGI(TAG, "Bus is now awake.");
+  ESP_LOGI(MAIN, "Bus is now awake.");
 }
 
 static void wake_pin_init()
@@ -167,8 +421,8 @@ extern "C" void app_main(void)
 	esp_reset_reason_t reason = esp_reset_reason();
 	bool warmWake = (reason == ESP_RST_DEEPSLEEP);
 	bool coldBoot = !warmWake;
-	ESP_LOGI(TAG, "Boot count: %d", boot_count);
-	ESP_LOGI(TAG, "Cold boot: %s", coldBoot ? "Yes" : "No");
+	ESP_LOGI(MAIN, "Boot count: %d", boot_count);
+	ESP_LOGI(MAIN, "Cold boot: %s", coldBoot ? "Yes" : "No");
 
   flash_led(2);
 
@@ -180,29 +434,47 @@ extern "C" void app_main(void)
 		ESP_ERROR_CHECK(nvs_flash_init());
 	}
 
-	// Initialize radio and join LoRaWAN network
-#ifndef LORAWAN_DRY_RUN_MODE
-	ESP_LOGI(TAG, "[SX1276] Initializing radio...");
-	radioLibState = radio.begin();
-	if (radioLibState != RADIOLIB_ERR_NONE) {
-		ESP_LOGE(TAG, "Failed to initialize radio: %d", radioLibState);
-		return;
-	}
-	ESP_LOGI(TAG, "[LoRaWAN] Initializing node...");
-	radioLibState = node.beginOTAA(joinEUI, devEUI, nwkKey, appKey);
-	if (radioLibState != RADIOLIB_ERR_NONE) {
-		ESP_LOGE(TAG, "Failed to initialize LoRaWAN node: %d", radioLibState);
-		return;
-	}
-	radioLibState = lwActivate(node);
-  node.setTxPower(14);
-  node.setDutyCycle(false);
-  node.setADR(false);
-  node.setDatarate(4);
+  if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+      ESP_ERROR_CHECK(nvs_flash_erase());
+      err = nvs_flash_init();
+  }
+  ESP_ERROR_CHECK(err);
 
-#else
-	ESP_LOGI(TAG, "Dry-run mode: skipping radio and LoRaWAN initialization.");
-#endif
+  #if MQTT_ENABLE == true && DRY_RUN_MODE == false
+  // Connect to Wi-Fi and sync time
+  wifi_init_sta();  
+  wait_for_time_sync();  
+
+  // Connect to MQTT broker
+  MQTTClient client{broker, credentials, config};
+  vTaskDelay(pdMS_TO_TICKS(2000)); //wait a bit for it to connect
+  #else
+    ESP_LOGI(MAIN, "Skipping WiFi and MQTT initialisation.");
+  #endif
+
+	// Initialize radio and join LoRaWAN network
+  #if LORAWAN_ENABLE == true && DRY_RUN_MODE == false
+    ESP_LOGI(LORAWAN, "Initializing radio...");
+    radioLibState = radio.begin();
+    if (radioLibState != RADIOLIB_ERR_NONE) {
+      ESP_LOGE(LORAWAN, "Failed to initialize radio: %d", radioLibState);
+      return;
+    }
+    ESP_LOGI(LORAWAN, "Initializing node...");
+    radioLibState = node.beginOTAA(joinEUI, devEUI, nwkKey, appKey);
+    if (radioLibState != RADIOLIB_ERR_NONE) {
+      ESP_LOGE(LORAWAN, "Failed to initialize LoRaWAN node: %d", radioLibState);
+      return;
+    }
+    radioLibState = lwActivate(node);
+    node.setTxPower(14);
+    node.setDutyCycle(false);
+    node.setADR(false);
+    node.setDatarate(4);
+
+  #else
+    ESP_LOGI(MAIN, "Skipping radio and LoRaWAN initialisation.");
+  #endif
 
 	// Init RS485 and WeatherBus
 	sensorbus_init();
@@ -213,12 +485,12 @@ extern "C" void app_main(void)
 	if (!coldBoot && rtc_slave_count > 0) {
 		slave_count = rtc_slave_count;
 		memcpy(slaves, rtc_slaves, slave_count * sizeof(slave_entry_t));
-		ESP_LOGI(TAG, "Restored %zu slaves from RTC RAM", slave_count);
+		ESP_LOGI(WBUS, "Restored %zu slaves from RTC RAM", slave_count);
 	}
 
 	// Otherwise, if its a cold boot or no slaves are stored, discover slaves from scratch.
 	if (coldBoot || slave_count == 0) {
-		ESP_LOGI(TAG, "Starting slave discovery...");
+		ESP_LOGI(WBUS, "Starting slave discovery...");
 		sensorbus_packet_t pkt;
 		slave_count = 0;
 		sensorbus_send(SENSORBUS_DISCOVERY, MASTER_ID, NULL, 0);
@@ -257,14 +529,14 @@ extern "C" void app_main(void)
 		// Save discovered slaves to RTC RAM
 		rtc_slave_count = slave_count;
 		memcpy(rtc_slaves, slaves, slave_count * sizeof(slave_entry_t));
-		ESP_LOGI(TAG, "Saved %zu slaves to RTC RAM", slave_count);
-		ESP_LOGI(TAG, "%zu slave(s) discovered", slave_count);
+		ESP_LOGI(WBUS, "Saved %zu slaves to RTC RAM", slave_count);
+		ESP_LOGI(WBUS, "%zu slave(s) discovered", slave_count);
 	}
 
 	// Query each slave and update readings
 	for (size_t si = 0; si < slave_count; si++) {
 		uint32_t dev_id = slaves[si].device_id;
-		ESP_LOGI(TAG, "Querying slave 0x%08" PRIX32, dev_id);
+		ESP_LOGI(WBUS, "Querying slave 0x%08" PRIX32, dev_id);
 
 		payload_builder_t query_buffer;
 		pb_init(&query_buffer);
@@ -278,8 +550,8 @@ extern "C" void app_main(void)
 		// Send query and collect response
 		sensorbus_send(SENSORBUS_QUERY, dev_id, query_buffer.buf, query_buffer.len);
 		sensorbus_packet_t resp;
-		if (sensorbus_receive_timeout(200, &resp) != SENSORBUS_OK) { // Should probably check for correct response type/origin
-			ESP_LOGW(TAG, "Slave 0x%08" PRIX32 " timed out", dev_id);
+		if (sensorbus_receive_timeout(PKT_TIMEOUT_MS, &resp) != SENSORBUS_OK) { // Should probably check for correct response type/origin
+			ESP_LOGW(WBUS, "Slave 0x%08" PRIX32 " timed out", dev_id);
 			continue;
 		}
 
@@ -287,7 +559,7 @@ extern "C" void app_main(void)
 		sensorbus_sensor_t out[SENSORBUS_MAX_TLVS];
 		size_t outn = 0;
 		if (sensorbus_pb_decode_sensors(resp.payload, resp.payload_len, out, &outn) != SENSORBUS_OK) {
-			ESP_LOGW(TAG, "bad TLV from slave 0x%08" PRIX32, dev_id);
+			ESP_LOGW(WBUS, "bad TLV from slave 0x%08" PRIX32, dev_id);
 			continue;
 		}
 		for (size_t k = 0; k < outn; k++) {
@@ -297,7 +569,7 @@ extern "C" void app_main(void)
 	// Fancy logging
 	for (size_t si = 0; si < slave_count; si++) {
 
-		ESP_LOGI(TAG, "┌── Slave 0x%08" PRIX32, slaves[si].device_id);
+		ESP_LOGI(WBUS, "┌── Slave 0x%08" PRIX32, slaves[si].device_id);
 
 		for (size_t i = 0; i < slaves[si].sensor_count; i++) {
 			const sensorbus_sensor_t &s = slaves[si].sensors[i];
@@ -311,7 +583,7 @@ extern "C" void app_main(void)
 			}
 
 			// Log the sensor information
-			ESP_LOGI(TAG, "│ type=0x%02X idx=%u fmt=%u len=%u val=%s",
+			ESP_LOGI(WBUS, "│ type=0x%02X idx=%u fmt=%u len=%u val=%s",
 				 s.type,
 				 s.index,
 				 s.format,
@@ -319,7 +591,7 @@ extern "C" void app_main(void)
 				 hexbuf);
 
 		}
-		ESP_LOGI(TAG, "└──");
+		ESP_LOGI(WBUS, "└──");
 	}
 
 	// Build and send the uplink.
@@ -330,27 +602,47 @@ extern "C" void app_main(void)
 	}
 
 	if (uplink_len > 0) {
-		ESP_LOGI(TAG, "Built uplink payload with %zu bytes", uplink_len);
+		ESP_LOGI(MAIN, "Built uplink payload with %zu bytes", uplink_len);
 
-#ifndef LORAWAN_DRY_RUN_MODE
-		// Normal send process
-		radioLibState = node.sendReceive(uplink_payload, uplink_len);
-		ESP_LOGI(TAG, "Radiolib code: %d, FCntUp now %" PRIu32,
-			 radioLibState, node.getFCntUp());
-		memcpy(LWsession, node.getBufferSession(), RADIOLIB_LORAWAN_SESSION_BUF_SIZE);
-#else
-		// Dump the bytes instead of sending on dry-run mode
-		printf("DRY_RUN_MODE enabled — would send uplink (%zu bytes):\n", uplink_len);
-		for (size_t i = 0; i < uplink_len; i++)
-			printf("%02X ", uplink_payload[i]);
-		printf("\n");
-#endif
+    #if MQTT_ENABLE == true && DRY_RUN_MODE == false
+      std::string json_payload = build_json_payload(slaves, slave_count);
+
+      mqtt::Message msg = mqtt::Message<std::string>{
+          .data = json_payload,
+          .qos = mqtt::QoS::AtLeastOnce,
+          .retain = mqtt::Retain::NotRetained,
+      };
+
+      auto msg_id = client.publish(MQTT_PUBLISH_TOPIC, msg);
+      if (msg_id) {
+          ESP_LOGI(MQTT, "Published JSON uplink with ID %d", static_cast<int>(*msg_id));
+          ESP_LOGI(MQTT, "Payload: %s", json_payload.c_str());
+      } else {
+          ESP_LOGE(MQTT, "Failed to publish uplink");
+      }
+
+      vTaskDelay(pdMS_TO_TICKS(5000)); // Wait for MQTT publish to complete
+    #endif
+    #if LORAWAN_ENABLE == true && DRY_RUN_MODE == false
+        // Normal send process
+        radioLibState = node.sendReceive(uplink_payload, uplink_len);
+        ESP_LOGI(LORAWAN, "Radiolib code: %d, FCntUp now %" PRIu32,
+          radioLibState, node.getFCntUp());
+        memcpy(LWsession, node.getBufferSession(), RADIOLIB_LORAWAN_SESSION_BUF_SIZE);
+    #endif
+    #if DRY_RUN_MODE == true
+        // Dump the bytes instead of sending on dry-run mode
+        printf("DRY_RUN_MODE enabled — would send uplink (%zu bytes):\n", uplink_len);
+        for (size_t i = 0; i < uplink_len; i++)
+          printf("%02X ", uplink_payload[i]);
+        printf("\n");
+    #endif
 	} else {
-		ESP_LOGW(TAG, "Nothing to send (payload %zu bytes)", uplink_len);
+		ESP_LOGW(MAIN, "Nothing to send (payload %zu bytes)", uplink_len);
 	}
 
   sleep_bus();
 	esp_sleep_enable_timer_wakeup(SLEEP_INTERVAL_US);
-	ESP_LOGI(TAG, "Entering deep sleep for %llu seconds...", (SLEEP_INTERVAL_US / 1000000ULL));
+	ESP_LOGI(MAIN, "Entering deep sleep for %llu seconds...", (SLEEP_INTERVAL_US / 1000000ULL));
 	esp_deep_sleep_start();
 }

@@ -4,4 +4,4 @@ set(SOURCES
     "lorawan_storage.cpp"
     )
 
-idf_component_register(SRCS ${SOURCES} INCLUDE_DIRS ".")
+idf_component_register(SRCS ${SOURCES} INCLUDE_DIRS "." EMBED_TXTFILES "mqtt_ca_cert.pem")
