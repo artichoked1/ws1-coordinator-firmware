@@ -62,7 +62,7 @@
 // The maximum number of sensors that can be discovered per slave.
 // This is also a static allocation, so it should be set according to your needs.
 // Due to streaming support not yet added, it should be as large as the maximum number of sensors you can fit in a single packet.
-#define MAX_SENSOR_CNT SENSORBUS_MAX_TLVS
+#define MAX_SENSOR_CNT 6
 
 // The window for discovery packets in milliseconds.
 #define DISCOVERY_WINDOW_MS 3000
@@ -74,8 +74,8 @@
 
 #define MQTT_ENABLE true
 
-#define WIFI_SSID "ssid"
-#define WIFI_PASS "very-secret"
+#define WIFI_SSID "REMOVED"
+#define WIFI_PASS "REMOVED"
 
 #define MQTT_USE_V5 false
 #define MQTT_USE_TLS false

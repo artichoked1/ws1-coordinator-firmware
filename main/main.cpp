@@ -406,7 +406,7 @@ static void wake_pin_init()
 
   // Force it to GPIO output, start low
   ESP_ERROR_CHECK(gpio_set_direction(GPIO_NUM_15, GPIO_MODE_OUTPUT));
-  ESP_ERROR_CHECK(gpio_set_pull_mode(GPIO_NUM_15, GPIO_FLOATING)); // or GPIO_PULLDOWN_ONLY
+  ESP_ERROR_CHECK(gpio_set_pull_mode(GPIO_NUM_15, GPIO_PULLUP_ONLY)); // or GPIO_PULLDOWN_ONLY
   ESP_ERROR_CHECK(gpio_set_level(GPIO_NUM_15, 0));
 }
 
